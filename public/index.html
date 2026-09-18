@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Node Screen Share</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #222; color: white; text-align: center; padding: 20px; }
+        video { width: 80%; max-width: 900px; border: 2px solid #555; border-radius: 8px; margin-top: 20px; background: #000; }
+        button { padding: 12px 24px; font-size: 16px; margin: 10px; cursor: pointer; border: 0; border-radius: 5px; background: #2271b1; color: white; }
+        button:hover { background: #135e96; }
+    </style>
+</head>
+<body>
+    <h1>Node.js WebRTC Screen Share</h1>
+    <div>
+        <button id="hostBtn">Start Hosting My Screen</button>
+        <button id="watchBtn">Watch Screen</button>
+    </div>
+    <br>
+    <video id="video" autoplay muted></video>
+
+    <!-- Load Socket.io client from the server -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        const video = document.getElementById('video');
+        let peerConnection;
+        
+        // Google's free STUN server helps browsers find each other's IP addresses
+        const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+        // 1. HOST LOGIC: Share the screen
+        document.getElementById('hostBtn').addEventListener('click', async () => {
+            const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+            video.srcObject = stream; // Show it locally
+
+            peerConnection = new RTCPeerConnection(servers);
+            stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
+
+            // Send network info to the server
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) socket.emit('ice-candidate', event.candidate);
+            };
+
+            // Create an "Offer" and send it to the server
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit('offer', offer);
+        });
+
+        // 2. VIEWER LOGIC: Receive the offer and reply
+        socket.on('offer', async (offer) => {
+            peerConnection = new RTCPeerConnection(servers);
+            
+            // Show the incoming stream
+            peerConnection.ontrack = event => { video.srcObject = event.streams[0]; };
+            
+            // Send network info to the server
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) socket.emit('ice-candidate', event.candidate);
+            };
+
+            // Accept the offer, create an "Answer" and send it back
+            await peerConnection.setRemoteDescription(offer);
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.emit('answer', answer);
+        });
+
+        // 3. HOST LOGIC: Receive the answer from the viewer
+        socket.on('answer', (answer) => {
+            peerConnection.setRemoteDescription(answer);
+        });
+
+        // 4. BOTH LOGIC: Exchange network routing info
+        socket.on('ice-candidate', async (candidate) => {
+            if (peerConnection) {
+                await peerConnection.addIceCandidate(candidate);
+            }
+        });
+    </script>
+</body>
+</html>
