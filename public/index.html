@@ -3,108 +3,657 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
     <title>Node Screen Share</title>
+
     <style>
-        body { font-family: Arial, sans-serif; background: #222; color: white; text-align: center; padding: 20px; }
-        video { width: 80%; max-width: 900px; border: 2px solid #555; border-radius: 8px; margin-top: 20px; background: #000; }
-        button { padding: 12px 24px; font-size: 16px; margin: 10px; cursor: pointer; border: 0; border-radius: 5px; background: #2271b1; color: white; }
-        button:hover { background: #135e96; }
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #222;
+            color: white;
+            text-align: center;
+            padding: 20px;
+            margin: 0;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            margin: 10px;
+            cursor: pointer;
+            border: 0;
+            border-radius: 5px;
+            background: #2271b1;
+            color: white;
+        }
+
+        button:hover {
+            background: #135e96;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #status {
+            margin: 20px auto;
+            padding: 12px;
+            max-width: 700px;
+            color: #ffeb3b;
+            min-height: 20px;
+        }
+
+        video {
+            width: 80%;
+            max-width: 1200px;
+            border: 2px solid #555;
+            border-radius: 8px;
+            margin-top: 20px;
+            background: #000;
+        }
+
+        #video {
+            display: none;
+        }
+
+        .hosting {
+            background: #1a4314;
+        }
     </style>
 </head>
-<body>
-    <h1>Node.js WebRTC Screen Share</h1>
-    <div>
-        <button id="hostBtn">Start Hosting My Screen</button>
-        <button id="watchBtn">Watch Screen</button>
-    </div>
-    <br>
-    <video id="video" autoplay muted></video>
 
-    <!-- Load Socket.io client from the server -->
+<body>
+
+    <h1>Node.js WebRTC Screen Share</h1>
+
+    <div id="buttons">
+        <button id="hostBtn">
+            Start Hosting My Screen
+        </button>
+
+        <button id="watchBtn">
+            Watch Screen
+        </button>
+    </div>
+
+    <div id="status"></div>
+
+    <video
+        id="video"
+        autoplay
+        playsinline
+        controls>
+    </video>
+
     <script src="/socket.io/socket.io.js"></script>
-            <script>
+
+    <script>
         const socket = io();
-        const video = document.getElementById('video');
-        let peerConnection;
+
+        const video = document.getElementById("video");
+        const hostBtn = document.getElementById("hostBtn");
+        const watchBtn = document.getElementById("watchBtn");
+        const status = document.getElementById("status");
+
+        let peerConnection = null;
+        let screenStream = null;
+
         let isHost = false;
         let isViewer = false;
-        
-        const servers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-        // 1. HOST LOGIC
-        document.getElementById('hostBtn').addEventListener('click', async () => {
-            if (peerConnection) return; // Prevent clicking twice
-            isHost = true;
-            
-            const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-            video.srcObject = stream;
+        // ICE candidates can arrive before the remote description.
+        // Store them until the connection is ready.
+        let pendingCandidates = [];
+
+        const servers = {
+            iceServers: [
+                {
+                    urls: "stun:stun.l.google.com:19302"
+                }
+            ]
+        };
+
+
+        // ---------------------------------------------------------
+        // STATUS
+        // ---------------------------------------------------------
+
+        function setStatus(message) {
+            status.textContent = message;
+            console.log(message);
+        }
+
+
+        // ---------------------------------------------------------
+        // CREATE PEER CONNECTION
+        // ---------------------------------------------------------
+
+        function createPeerConnection() {
 
             peerConnection = new RTCPeerConnection(servers);
-            stream.getTracks().forEach(track => peerConnection.addTrack(track, stream));
 
             peerConnection.onicecandidate = event => {
-                if (event.candidate) socket.emit('ice-candidate', event.candidate);
+
+                if (event.candidate) {
+
+                    socket.emit("ice-candidate", {
+                        candidate: event.candidate
+                    });
+
+                }
+
             };
 
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            socket.emit('offer', offer);
-            
-            document.body.style.background = "#1a4314";
-        });
 
-        // WATCH BUTTON LOGIC
-        document.getElementById('watchBtn').addEventListener('click', () => {
-            if (isViewer) return; // Prevent clicking twice
-            isViewer = true;
-            
-            document.getElementById('hostBtn').style.display = 'none';
-            document.getElementById('watchBtn').style.display = 'none';
-            
-            const h2 = document.createElement('h2');
-            h2.id = 'waitingText';
-            h2.innerText = "Waiting for host to start sharing...";
-            h2.style.color = "#ffeb3b";
-            document.querySelector('div').appendChild(h2);
-        });
+            peerConnection.onconnectionstatechange = () => {
 
-        // 2. VIEWER LOGIC
-        socket.on('offer', async (offer) => {
-            if (!isViewer || peerConnection) return; // Only process the first offer
-            
-            peerConnection = new RTCPeerConnection(servers);
-            
-            peerConnection.ontrack = event => { 
-                video.srcObject = event.streams[0]; 
-                const h2 = document.getElementById('waitingText');
-                if(h2) h2.remove();
-            };
-            
-            peerConnection.onicecandidate = event => {
-                if (event.candidate) socket.emit('ice-candidate', event.candidate);
+                console.log(
+                    "Connection state:",
+                    peerConnection.connectionState
+                );
+
+                if (
+                    peerConnection.connectionState === "connected"
+                ) {
+                    setStatus("Screen connected.");
+
+                } else if (
+                    peerConnection.connectionState === "disconnected"
+                ) {
+                    setStatus("Connection disconnected.");
+
+                } else if (
+                    peerConnection.connectionState === "failed"
+                ) {
+                    setStatus(
+                        "Connection failed. Please refresh and try again."
+                    );
+                }
+
             };
 
-            await peerConnection.setRemoteDescription(offer);
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-            socket.emit('answer', answer);
-        });
 
-        // 3. HOST LOGIC
-        socket.on('answer', async (answer) => {
-            if (!isHost || !peerConnection || peerConnection.remoteDescription) return; // Only process the first answer
-            
-            await peerConnection.setRemoteDescription(answer);
-        });
+            peerConnection.oniceconnectionstatechange = () => {
 
-        // 4. ICE LOGIC
-        socket.on('ice-candidate', async (candidate) => {
-            if (peerConnection && peerConnection.remoteDescription) {
-                try {
-                    await peerConnection.addIceCandidate(candidate);
-                } catch (e) { console.log("ICE Error safely ignored:", e); }
+                console.log(
+                    "ICE state:",
+                    peerConnection.iceConnectionState
+                );
+
+            };
+
+
+            return peerConnection;
+        }
+
+
+        // ---------------------------------------------------------
+        // HOST
+        // ---------------------------------------------------------
+
+        hostBtn.addEventListener("click", async () => {
+
+            if (isHost) {
+                return;
             }
+
+            try {
+
+                isHost = true;
+
+                hostBtn.disabled = true;
+                watchBtn.disabled = true;
+
+                document.body.classList.add("hosting");
+
+                setStatus(
+                    "Requesting permission to share your screen..."
+                );
+
+
+                // Ask browser for screen sharing
+                screenStream =
+                    await navigator.mediaDevices.getDisplayMedia({
+                        video: true,
+                        audio: false
+                    });
+
+
+                // Show local preview
+                video.srcObject = screenStream;
+                video.style.display = "block";
+
+                setStatus(
+                    "Your screen is being shared. Waiting for a viewer..."
+                );
+
+
+                // If host stops sharing using browser's
+                // "Stop sharing" button
+                screenStream
+                    .getVideoTracks()[0]
+                    .addEventListener("ended", () => {
+
+                        setStatus("Screen sharing stopped.");
+
+                        if (peerConnection) {
+                            peerConnection.close();
+                            peerConnection = null;
+                        }
+
+                        isHost = false;
+                        hostBtn.disabled = false;
+                        watchBtn.disabled = false;
+
+                    });
+
+
+                // Tell server that this socket is the host
+                socket.emit("host-ready");
+
+
+            } catch (error) {
+
+                console.error(error);
+
+                isHost = false;
+
+                hostBtn.disabled = false;
+                watchBtn.disabled = false;
+
+                setStatus(
+                    "Screen sharing was cancelled or blocked."
+                );
+
+            }
+
         });
+
+
+        // ---------------------------------------------------------
+        // VIEWER
+        // ---------------------------------------------------------
+
+        watchBtn.addEventListener("click", () => {
+
+            if (isViewer) {
+                return;
+            }
+
+            isViewer = true;
+
+            hostBtn.style.display = "none";
+            watchBtn.style.display = "none";
+
+            setStatus(
+                "Looking for a screen host..."
+            );
+
+            /*
+             * IMPORTANT:
+             * Do NOT wait for an offer here.
+             *
+             * Tell the server that this viewer is ready.
+             * The server will tell the host.
+             */
+
+            socket.emit("viewer-ready");
+
+        });
+
+
+        // ---------------------------------------------------------
+        // HOST RECEIVES VIEWER READY
+        // ---------------------------------------------------------
+
+        socket.on("viewer-ready", async () => {
+
+            if (!isHost) {
+                return;
+            }
+
+            if (!screenStream) {
+                return;
+            }
+
+            try {
+
+                setStatus(
+                    "Viewer connected. Creating screen connection..."
+                );
+
+
+                // Close previous connection if one exists
+                if (peerConnection) {
+                    peerConnection.close();
+                    peerConnection = null;
+                }
+
+                pendingCandidates = [];
+
+
+                // Create new WebRTC connection
+                createPeerConnection();
+
+
+                // Add screen tracks
+                screenStream
+                    .getTracks()
+                    .forEach(track => {
+
+                        peerConnection.addTrack(
+                            track,
+                            screenStream
+                        );
+
+                    });
+
+
+                // Create offer
+                const offer =
+                    await peerConnection.createOffer();
+
+
+                await peerConnection.setLocalDescription(
+                    offer
+                );
+
+
+                // Send offer to viewer
+                socket.emit(
+                    "offer",
+                    peerConnection.localDescription
+                );
+
+
+                setStatus(
+                    "Connecting to viewer..."
+                );
+
+
+            } catch (error) {
+
+                console.error(
+                    "Host offer error:",
+                    error
+                );
+
+                setStatus(
+                    "Could not create screen connection."
+                );
+
+            }
+
+        });
+
+
+        // ---------------------------------------------------------
+        // VIEWER RECEIVES OFFER
+        // ---------------------------------------------------------
+
+        socket.on("offer", async offer => {
+
+            if (!isViewer) {
+                return;
+            }
+
+            try {
+
+                setStatus(
+                    "Host found. Connecting..."
+                );
+
+
+                // Create viewer connection
+                createPeerConnection();
+
+
+                // Viewer receives host's screen
+                peerConnection.ontrack = event => {
+
+                    console.log(
+                        "Received remote track",
+                        event
+                    );
+
+                    if (event.streams && event.streams[0]) {
+
+                        video.srcObject =
+                            event.streams[0];
+
+                        video.style.display = "block";
+
+                        setStatus(
+                            "Screen connected."
+                        );
+
+                        // Try autoplay
+                        video.play().catch(error => {
+                            console.log(
+                                "Autoplay prevented:",
+                                error
+                            );
+                        });
+
+                    }
+
+                };
+
+
+                // Set host offer
+                await peerConnection.setRemoteDescription(
+                    new RTCSessionDescription(offer)
+                );
+
+
+                // Add any ICE candidates that arrived early
+                for (
+                    const candidate
+                    of pendingCandidates
+                ) {
+
+                    try {
+
+                        await peerConnection.addIceCandidate(
+                            candidate
+                        );
+
+                    } catch (error) {
+
+                        console.error(
+                            "ICE candidate error:",
+                            error
+                        );
+
+                    }
+
+                }
+
+                pendingCandidates = [];
+
+
+                // Create answer
+                const answer =
+                    await peerConnection.createAnswer();
+
+
+                await peerConnection.setLocalDescription(
+                    answer
+                );
+
+
+                // Send answer to host
+                socket.emit(
+                    "answer",
+                    peerConnection.localDescription
+                );
+
+
+            } catch (error) {
+
+                console.error(
+                    "Viewer offer error:",
+                    error
+                );
+
+                setStatus(
+                    "Could not connect to the host."
+                );
+
+            }
+
+        });
+
+
+        // ---------------------------------------------------------
+        // HOST RECEIVES ANSWER
+        // ---------------------------------------------------------
+
+        socket.on("answer", async answer => {
+
+            if (!isHost) {
+                return;
+            }
+
+            if (!peerConnection) {
+                return;
+            }
+
+            try {
+
+                await peerConnection.setRemoteDescription(
+                    new RTCSessionDescription(answer)
+                );
+
+
+                // Add candidates that arrived before answer
+                for (
+                    const candidate
+                    of pendingCandidates
+                ) {
+
+                    try {
+
+                        await peerConnection.addIceCandidate(
+                            candidate
+                        );
+
+                    } catch (error) {
+
+                        console.error(
+                            "ICE candidate error:",
+                            error
+                        );
+
+                    }
+
+                }
+
+                pendingCandidates = [];
+
+
+                setStatus(
+                    "Viewer connected."
+                );
+
+
+            } catch (error) {
+
+                console.error(
+                    "Answer error:",
+                    error
+                );
+
+            }
+
+        });
+
+
+        // ---------------------------------------------------------
+        // ICE CANDIDATES
+        // ---------------------------------------------------------
+
+        socket.on("ice-candidate", async data => {
+
+            if (!data || !data.candidate) {
+                return;
+            }
+
+            const candidate = new RTCIceCandidate(
+                data.candidate
+            );
+
+
+            /*
+             * If remote description isn't ready yet,
+             * save the candidate.
+             */
+
+            if (
+                !peerConnection ||
+                !peerConnection.remoteDescription
+            ) {
+
+                pendingCandidates.push(candidate);
+
+                return;
+            }
+
+
+            try {
+
+                await peerConnection.addIceCandidate(
+                    candidate
+                );
+
+            } catch (error) {
+
+                console.error(
+                    "ICE error:",
+                    error
+                );
+
+            }
+
+        });
+
+
+        // ---------------------------------------------------------
+        // SOCKET CONNECTION
+        // ---------------------------------------------------------
+
+        socket.on("connect", () => {
+
+            console.log(
+                "Socket connected:",
+                socket.id
+            );
+
+        });
+
+
+        socket.on("disconnect", () => {
+
+            console.log(
+                "Socket disconnected"
+            );
+
+            setStatus(
+                "Disconnected from server."
+            );
+
+        });
+
     </script>
+
 </body>
 </html>
