@@ -22,7 +22,7 @@
 
     <!-- Load Socket.io client from the server -->
     <script src="/socket.io/socket.io.js"></script>
-    <script>
+        <script>
         const socket = io();
         const video = document.getElementById('video');
         let peerConnection;
@@ -47,6 +47,21 @@
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
             socket.emit('offer', offer);
+            
+            document.body.style.background = "#1a4314"; // Green tint to show you are hosting
+        });
+
+        // WATCH BUTTON LOGIC
+        document.getElementById('watchBtn').addEventListener('click', () => {
+            // Hide the host button so you don't accidentally click it
+            document.getElementById('hostBtn').style.display = 'none';
+            document.getElementById('watchBtn').style.display = 'none';
+            
+            // Create a message on screen
+            const h2 = document.createElement('h2');
+            h2.innerText = "Waiting for host to start sharing...";
+            h2.style.color = "#ffeb3b";
+            document.querySelector('div').appendChild(h2);
         });
 
         // 2. VIEWER LOGIC: Receive the offer and reply
@@ -54,7 +69,12 @@
             peerConnection = new RTCPeerConnection(servers);
             
             // Show the incoming stream
-            peerConnection.ontrack = event => { video.srcObject = event.streams[0]; };
+            peerConnection.ontrack = event => { 
+                video.srcObject = event.streams[0]; 
+                // Remove the "waiting" text if it exists
+                const h2 = document.querySelector('h2');
+                if(h2) h2.remove();
+            };
             
             // Send network info to the server
             peerConnection.onicecandidate = event => {
